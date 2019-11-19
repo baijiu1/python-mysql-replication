@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+# -*- coding: UTF-8 -*-
+import pymysql
+import os
+import re
+replica_user = "replica"
+replica_pass = "spDn31UO4Q0b"
+master_user = slave_user = 'root'
+master_port = slave_port = 3307
+master_pass = slave_pass = '7AVr7QrdS5rb'
+check_master_ip = "cat /etc/hosts|grep 'master-0'|awk 'END{print $1}'"
+master_host = str(os.popen("%s"%(check_master_ip)).readlines()[0].strip('\n'))
+replica_ip = re.findall(r'(?<!\d)\d{1,3}\.\d{1,3}(?=\.\d).\d{1,3}.', master_host)[0] + '.%'
+check_ip_addr ="ip addr | grep inet | egrep -v '(127.0.0.1|inet6|docker)' | awk '{print $2}' | tr -d 'addr:' | head -n 1 | cut -d / -f1"
+online_host_ip = str(os.popen("%s"%(check_ip_addr)).readlines()[0].strip('\n'))
+def set_replica_account(master_host=master_host,master_user=master_user,master_pass=master_pass,master_port=master_port):
+    conn_set_replica = pymysql.connect(
+        host=master_host,
+        user=master_user,
+        passwd=master_pass,
+        port=master_port,
+        charset="utf8"
+    )
+    conn_set_replica.autocommit(1)
+    cursor = conn_set_replica.cursor()
+    set_account_sql = "grant replication client,usage,replication slave on *.* to 'replica'@'%s' identified by 'spDn31UO4Q0b';"%(replica_ip)
+    replica_account_exists = "select user from mysql.user where user = 'replica';"
+    cursor.execute(replica_account_exists)
+    check_replica_exists = cursor.fetchone()
+    if str(check_replica_exists) == 'none':
+        cursor.execute(set_account_sql)
+set_replica_account()
+
+def get_master_gitd(master_host=master_host,master_user=master_user,master_pass=master_pass,master_port=master_port):
+    global gitd_purged
+    conn = pymysql.connect(
+    host=master_host,
+    user =master_user,
+    passwd =master_pass,
+    port = master_port,
+    charset = "utf8"
+    )
+    conn.autocommit(1)
+    cursor = conn.cursor()
+    sql = "show master status;"
+    cursor.execute(sql)
+    text = cursor.fetchall()
+    gitd_purged = text[0][4].split(":")[0]
+    print(gitd_purged)
+    conn.close()
+
+def change_master_to_on_slave(online_host_ip=online_host_ip,slave_user=slave_user,slave_pass=slave_pass,slave_port=slave_port):
+    conn_slave = pymysql.connect(
+        host=online_host_ip,
+        user=slave_user,
+        passwd=slave_pass,
+        port=slave_port,
+        charset="utf8"
+    )
+    conn_slave.autocommit(1)
+    cursor = conn_slave.cursor()
+    reset_master_sql = "reset master;"
+    reset_slave_sql = "reset slave all;"
+    stop_slave_sql = "stop slave;"
+    change_master_sql  = "set global gtid_purged = '%s';"%(gitd_purged)
+    set_master_sql = "change master to master_host='%s',master_user='%s',master_password='%s',master_port=%s,master_auto_position=1,MASTER_HEARTBEAT_PERIOD=2,MASTER_CONNECT_RETRY=1, MASTER_RETRY_COUNT=86400;"%(master_host,replica_user,replica_pass,master_port)
+    start_slave_sql = "start slave;"
+    cursor.execute(stop_slave_sql)
+    cursor.execute(reset_master_sql)
+    cursor.execute(reset_slave_sql)
+    cursor.execute(change_master_sql)
+    cursor.execute(set_master_sql)
+    cursor.execute(start_slave_sql)
+    get_slave_status = "show slave status"
+    cursor.execute(get_slave_status)
+    slave_status = cursor.fetchone()
+    print(slave_status)
+    conn_slave.close()
+
+get_master_gitd()
+change_master_to_on_slave()
